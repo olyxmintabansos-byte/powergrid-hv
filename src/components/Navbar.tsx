@@ -13,7 +13,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   RefreshCw,
-  Sliders,
 } from "lucide-react";
 
 export const Navbar: React.FC = () => {
@@ -23,8 +22,8 @@ export const Navbar: React.FC = () => {
   const navItems = [
     { label: "Substation SLD", href: "/", icon: Zap },
     { label: "IBT Transformer", href: "/transformer/", icon: Layers },
-    { label: "Distance Relay", href: "/relay/", icon: Activity, badge: "Sprint 3" },
-    { label: "PLN Switching A4", href: "/dispatch/", icon: FileText, badge: "Sprint 3" },
+    { label: "Distance Relay", href: "/relay/", icon: Activity },
+    { label: "PLN Switching A4", href: "/dispatch/", icon: FileText },
   ];
 
   return (
@@ -125,11 +124,6 @@ export const Navbar: React.FC = () => {
               >
                 <Icon className={`w-4 h-4 ${isActive ? "text-cyan-400" : "text-slate-400"}`} />
                 <span>{item.label}</span>
-                {item.badge && (
-                  <span className="text-[9px] px-1.5 py-0.2 font-mono bg-slate-800 text-slate-400 rounded border border-slate-700">
-                    {item.badge}
-                  </span>
-                )}
               </Link>
             );
           })}

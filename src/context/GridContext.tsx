@@ -6,6 +6,9 @@ import {
   InterbusTransformer,
   GridKPIs,
   BreakerStatus,
+  DistanceRelayConfig,
+  PlnSwitchingOrderSheet,
+  FaultType,
 } from "@/types/grid";
 
 const INITIAL_BAYS: SubstationBay[] = [
@@ -101,15 +104,85 @@ const INITIAL_IBT: InterbusTransformer = {
   },
 };
 
+const INITIAL_RELAY: DistanceRelayConfig = {
+  tag: "SEL-421 NUMERICAL DISTANCE RELAY",
+  protectedLineName: "500 kV Mandirancan - Ungaran Ckt 1",
+  lineLengthKm: 180,
+  lineImpedanceOhmPerKm: 0.32,
+  totalLineImpedanceOhm: 57.6,
+  simulatedFaultDistanceKm: 45,
+  simulatedFaultType: "NORMAL_LOAD",
+  measuredResistanceR: 42.5,
+  measuredReactanceX: 68.2,
+  trippedZone: null,
+  tripCommandIssued: false,
+  zones: [
+    { zoneName: "Zone 1 (Instantaneous 80%)", reachPercentagePct: 80, impedanceReachOhm: 46.08, operatingTimeMs: 20, isTriggered: false },
+    { zoneName: "Zone 2 (Overreach 120%)", reachPercentagePct: 120, impedanceReachOhm: 69.12, operatingTimeMs: 300, isTriggered: false },
+    { zoneName: "Zone 3 (Remote Backup 150%)", reachPercentagePct: 150, impedanceReachOhm: 86.40, operatingTimeMs: 800, isTriggered: false },
+  ],
+};
+
+const INITIAL_SWITCHING_SHEET: PlnSwitchingOrderSheet = {
+  orderSheetNo: "ROMJ/PLN-UIP2B/UNG/2026/09/042",
+  dispatchCenter: "PLN UIP2B JAWA-BALI (GANDUL DISPATCH CENTER)",
+  substationName: "GITET 500 kV UNGARAN",
+  targetBay: "BAY 500 kV MANDIRANCAN (LINE 1)",
+  purpose: "PEMBEBASAN TEGANGAN UNTUK PEMELIHARAAN PREVENTIF BAY & SIKLUS PMT",
+  plannedDate: "25 SEPTEMBER 2026",
+  dispatcherName: "Ir. Doni Prasetyo (Senior Dispatcher Gandul)",
+  fieldSupervisorName: "Bambang Sudarsono, ST (Supervisor Gardu Induk Ungaran)",
+  safetyOfficerK3Name: "Agus Wibowo, SKM (Ahli K3 Listrik PLN)",
+  steps: [
+    {
+      stepNo: 1,
+      equipmentTag: "52-MND-1 (Circuit Breaker)",
+      actionRequired: "OPEN_BREAKER",
+      description: "Buka Pemutus Tenaga (PMT) 500 kV Bay Mandirancan. Pastikan arus beban 0 A.",
+      interlockVerified: true,
+      isExecuted: false,
+    },
+    {
+      stepNo: 2,
+      equipmentTag: "89-MND-B1 (Bus Disconnect)",
+      actionRequired: "OPEN_DISCONNECT",
+      description: "Buka Pemisah (PMS) Busbar 1 Bay Mandirancan setelah PMT terbuka sempurna.",
+      interlockVerified: true,
+      isExecuted: false,
+    },
+    {
+      stepNo: 3,
+      equipmentTag: "89-MND-L (Line Disconnect)",
+      actionRequired: "OPEN_DISCONNECT",
+      description: "Buka Pemisah (PMS) Saluran Transmisi ke arah GITET Mandirancan.",
+      interlockVerified: true,
+      isExecuted: false,
+    },
+    {
+      stepNo: 4,
+      equipmentTag: "89-MND-ES (Ground Switch)",
+      actionRequired: "CLOSE_EARTH_SWITCH",
+      description: "Tutup Pemisah Tanah (PMS Tanah / ES) untuk membuang muatan induksi kapasitif line.",
+      interlockVerified: true,
+      isExecuted: false,
+    },
+  ],
+};
+
 interface GridContextType {
   bays: SubstationBay[];
   ibt: InterbusTransformer;
   kpis: GridKPIs;
   isBusFaultTripped: boolean;
+  relay: DistanceRelayConfig;
+  switchingSheet: PlnSwitchingOrderSheet;
   toggleBreaker: (bayId: string) => void;
   adjustOltcTap: (delta: number) => void;
   toggleCoolingBank: () => void;
   triggerEmergencyBusTrip: () => void;
+  simulateFaultAtDistance: (distanceKm: number, fault: FaultType) => void;
+  clearRelayTrip: () => void;
+  executeSwitchingStep: (stepNo: number) => void;
   resetGridSystem: () => void;
   resetToDefaults: () => void;
 }
@@ -120,14 +193,20 @@ export const GridProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [bays, setBays] = useState<SubstationBay[]>(INITIAL_BAYS);
   const [ibt, setIbt] = useState<InterbusTransformer>(INITIAL_IBT);
   const [isBusFaultTripped, setIsBusFaultTripped] = useState<boolean>(false);
+  const [relay, setRelay] = useState<DistanceRelayConfig>(INITIAL_RELAY);
+  const [switchingSheet, setSwitchingSheet] = useState<PlnSwitchingOrderSheet>(INITIAL_SWITCHING_SHEET);
 
   // Sync from LocalStorage
   useEffect(() => {
     try {
       const savedBays = localStorage.getItem("grid_bays_v1");
       const savedIbt = localStorage.getItem("grid_ibt_v1");
+      const savedRelay = localStorage.getItem("grid_relay_v1");
+      const savedSheet = localStorage.getItem("grid_sheet_v1");
       if (savedBays) setBays(JSON.parse(savedBays));
       if (savedIbt) setIbt(JSON.parse(savedIbt));
+      if (savedRelay) setRelay(JSON.parse(savedRelay));
+      if (savedSheet) setSwitchingSheet(JSON.parse(savedSheet));
     } catch {
       console.warn("Storage sync fallback");
     }
@@ -137,7 +216,9 @@ export const GridProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     localStorage.setItem("grid_bays_v1", JSON.stringify(bays));
     localStorage.setItem("grid_ibt_v1", JSON.stringify(ibt));
-  }, [bays, ibt]);
+    localStorage.setItem("grid_relay_v1", JSON.stringify(relay));
+    localStorage.setItem("grid_sheet_v1", JSON.stringify(switchingSheet));
+  }, [bays, ibt, relay, switchingSheet]);
 
   // Recalculate Grid KPIs
   const activeBays = isBusFaultTripped ? [] : bays.filter((b) => b.circuitBreakerStatus === "CLOSED_ENERGIZED");
@@ -209,18 +290,97 @@ export const GridProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
+  // Sprint 3: Numerical Distance Relay Logic
+  const simulateFaultAtDistance = (distanceKm: number, fault: FaultType) => {
+    if (fault === "NORMAL_LOAD") {
+      setRelay((prev) => ({
+        ...prev,
+        simulatedFaultDistanceKm: distanceKm,
+        simulatedFaultType: "NORMAL_LOAD",
+        measuredResistanceR: 42.5,
+        measuredReactanceX: 68.2,
+        trippedZone: null,
+        tripCommandIssued: false,
+        zones: prev.zones.map((z) => ({ ...z, isTriggered: false })),
+      }));
+      return;
+    }
+
+    // Fault calculations: Z = distanceKm * 0.32 Ohm/km
+    const faultZ = distanceKm * 0.32;
+    const r = parseFloat((faultZ * 0.15).toFixed(2));
+    const x = parseFloat((faultZ * 0.98).toFixed(2));
+
+    let triggered: string | null = null;
+    let zone1 = false;
+    let zone2 = false;
+    let zone3 = false;
+
+    if (faultZ <= 46.08) {
+      triggered = "ZONE 1 (INSTANT TRIP 20ms)";
+      zone1 = true;
+    } else if (faultZ <= 69.12) {
+      triggered = "ZONE 2 (TIME DELAY 300ms)";
+      zone2 = true;
+    } else if (faultZ <= 86.40) {
+      triggered = "ZONE 3 (BACKUP 800ms)";
+      zone3 = true;
+    }
+
+    setRelay((prev) => ({
+      ...prev,
+      simulatedFaultDistanceKm: distanceKm,
+      simulatedFaultType: fault,
+      measuredResistanceR: r,
+      measuredReactanceX: x,
+      trippedZone: triggered,
+      tripCommandIssued: triggered !== null,
+      zones: [
+        { ...prev.zones[0], isTriggered: zone1 },
+        { ...prev.zones[1], isTriggered: zone2 },
+        { ...prev.zones[2], isTriggered: zone3 },
+      ],
+    }));
+
+    // If trip commanded, trip the Mandirancan Bay CB
+    if (triggered) {
+      setBays((prev) =>
+        prev.map((b) =>
+          b.id === "BAY-MANDIRANCAN"
+            ? { ...b, circuitBreakerStatus: "TRIPPED_FAULT", activePowerMw: 0 }
+            : b
+        )
+      );
+    }
+  };
+
+  const clearRelayTrip = () => {
+    simulateFaultAtDistance(45, "NORMAL_LOAD");
+  };
+
+  // Sprint 4: Switching Order Step Execution
+  const executeSwitchingStep = (stepNo: number) => {
+    setSwitchingSheet((prev) => ({
+      ...prev,
+      steps: prev.steps.map((s) => (s.stepNo === stepNo ? { ...s, isExecuted: true } : s)),
+    }));
+  };
+
   const resetGridSystem = () => {
     setIsBusFaultTripped(false);
     setBays(INITIAL_BAYS);
     setIbt(INITIAL_IBT);
+    setRelay(INITIAL_RELAY);
+    setSwitchingSheet(INITIAL_SWITCHING_SHEET);
   };
 
   const resetToDefaults = () => {
     setBays(INITIAL_BAYS);
     setIbt(INITIAL_IBT);
+    setRelay(INITIAL_RELAY);
+    setSwitchingSheet(INITIAL_SWITCHING_SHEET);
     setIsBusFaultTripped(false);
-    localStorage.removeItem("grid_bays_v1");
-    localStorage.removeItem("grid_ibt_v1");
+    localStorage.clear();
   };
 
   return (
@@ -230,10 +390,15 @@ export const GridProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ibt,
         kpis,
         isBusFaultTripped,
+        relay,
+        switchingSheet,
         toggleBreaker,
         adjustOltcTap,
         toggleCoolingBank,
         triggerEmergencyBusTrip,
+        simulateFaultAtDistance,
+        clearRelayTrip,
+        executeSwitchingStep,
         resetGridSystem,
         resetToDefaults,
       }}
